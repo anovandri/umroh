@@ -4,3 +4,4 @@
 .nx/workspace-data
 node_modules
 crawlee-storage
+dist
