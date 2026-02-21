@@ -40,7 +40,21 @@ import { logger } from "../../utils/logger";
 //  Text: "Hotel Makkah (04 Mlm)\n{Hotel Name}"
 //  Text: "Hotel Madinah (03 Mlm)\n{Hotel Name}"
 //  Text: "By {Airline} ({Class})"
-//  Date picker widget (Playwright)
+//  Departure date picker:
+//    <select class="form-control" onchange="pemberangkatan(this)">
+//      <option>Pilih waktu pemberangkatan...</option>
+//      <option value="2608">25 November 2026</option>
+//    </select>
+//  After selecting an option, #resultbody renders:
+//    <div id="resultbody">
+//      <table>
+//        <tr><td>Pemberangkatan</td><td>: 25 NOV 26 - </td></tr>
+//        <tr><td>Harga Quad</td>  <td>: Rp38.500.000,-</td></tr>
+//        <tr><td>Harga Triple</td><td>: Rp40.500.000,-</td></tr>
+//        <tr><td>Harga Double</td><td>: Rp43.500.000,-</td></tr>
+//        <tr><td colspan="2">... - 44 Seat available</td></tr>
+//      </table>
+//    </div>
 //  Tabs: Rincian Perjalanan | Termasuk | Tidak Termasuk
 // ============================================================
 
@@ -96,13 +110,20 @@ export class DreamtourExtractor extends BaseExtractor {
         : [];
       const inclusions = this.parseTabList($, "termasuk");
       const exclusions = this.parseTabList($, "tidak");
-      const description = this.parseItinerary($);
+      const itinerary = this.parseItinerary($);
+
+      // If the static "From IDR …" text wasn't found, derive the lowest
+      // Quad price from the per-date data collected by the date picker loop.
+      const resolvedPrice: PriceInfo =
+        price.amount > 0
+          ? price
+          : this.lowestPriceFromDates(departureDates, price.currency);
 
       return {
         id: this.extractPackageIdFromUrl(url),
         packageName,
         category,
-        price,
+        price: resolvedPrice,
         duration,
         hotels,
         airlines,
@@ -120,7 +141,7 @@ export class DreamtourExtractor extends BaseExtractor {
         },
         rawContent: {
           title: packageName,
-          description,
+          descriptionLines: itinerary.length > 0 ? itinerary : undefined,
         },
         sourceUrl: url,
         siteId: this.config.siteId,
@@ -276,45 +297,187 @@ export class DreamtourExtractor extends BaseExtractor {
   }
 
   /**
-   * Extract departure dates from the Playwright-rendered date picker.
+   * Iterate every option in the departure <select onchange="pemberangkatan(this)">,
+   * select it, wait for #resultbody to re-render, then scrape:
+   *   - date text from the option label  e.g. "25 November 2026"
+   *   - Harga Quad / Triple / Double from the result table
+   *   - seat count from "N Seat available" text
    */
   private async parseDepartureDatesFromPage(
     page: Page,
   ): Promise<DepartureDate[]> {
     try {
-      await page
-        .waitForSelector('[class*="departure"], .keberangkatan', {
+      // Wait for the departure select to appear
+      const selectHandle = await page
+        .waitForSelector('select[onchange*="pemberangkatan"]', {
           timeout: 8000,
         })
         .catch(() => null);
 
-      const rawDates = await page.evaluate(() => {
-        const results: string[] = [];
-        document
-          .querySelectorAll("select option, .departure-option, [data-date]")
-          .forEach((el) => {
-            const v =
-              (el as HTMLElement).getAttribute("data-date") ||
-              (el as HTMLElement).textContent?.trim();
-            if (v && v.length > 3 && !results.includes(v)) results.push(v);
-          });
-        if (results.length === 0) {
-          document
-            .querySelectorAll(
-              '[class*="jadwal"], [class*="tanggal"], [class*="date"]',
-            )
-            .forEach((el) => {
-              const t = (el as HTMLElement).textContent?.trim();
-              if (t && t.length > 3 && !results.includes(t)) results.push(t);
-            });
-        }
-        return results;
+      if (!selectHandle) {
+        logger.debug("DreamtourExtractor: departure select not found");
+        return [];
+      }
+
+      // Collect all real option values + labels (skip the placeholder)
+      const options = await page.evaluate(() => {
+        const sel = document.querySelector<HTMLSelectElement>(
+          'select[onchange*="pemberangkatan"]',
+        );
+        if (!sel) return [] as { value: string; label: string }[];
+        return Array.from(sel.options)
+          .filter((o) => o.value && o.value !== "")
+          .map((o) => ({ value: o.value, label: o.text.trim() }));
       });
 
-      return rawDates.map((d) => ({ date: d, available: true }));
-    } catch {
+      if (options.length === 0) return [];
+
+      const results: DepartureDate[] = [];
+
+      for (const opt of options) {
+        // Select the option value
+        await page.selectOption(
+          'select[onchange*="pemberangkatan"]',
+          opt.value,
+        );
+
+        // Wait for #resultbody to contain the pricing table
+        await page
+          .waitForFunction(
+            () =>
+              document
+                .querySelector("#resultbody")
+                ?.textContent?.includes("Harga"),
+            { timeout: 5000 },
+          )
+          .catch(() => null);
+
+        // Scrape the rendered #resultbody
+        const scraped = await page.evaluate(() => {
+          const body = document.querySelector("#resultbody");
+          if (!body) return null;
+
+          const parseRp = (td: Element | null): number => {
+            if (!td) return 0;
+            const raw = td.textContent ?? "";
+            return parseInt(raw.replace(/[^0-9]/g, ""), 10) || 0;
+          };
+
+          // Build a row map: label text → value text
+          const rows: Record<string, string> = {};
+          body.querySelectorAll("tr").forEach((tr) => {
+            const tds = tr.querySelectorAll("td");
+            if (tds.length >= 2) {
+              const key = (tds[0].textContent ?? "")
+                .replace(/[^a-zA-Z]/g, "")
+                .toLowerCase();
+              rows[key] = tds[1].textContent ?? "";
+            }
+          });
+
+          const quad = parseRp(
+            body.querySelector("tr:nth-child(2) td:nth-child(2)"),
+          );
+          const triple = parseRp(
+            body.querySelector("tr:nth-child(3) td:nth-child(2)"),
+          );
+          const double = parseRp(
+            body.querySelector("tr:nth-child(4) td:nth-child(2)"),
+          );
+
+          // "44 Seat available"  or  "44 Kursi tersedia"
+          const seatText =
+            body.querySelector("tr:last-child td")?.textContent ?? "";
+          const seatMatch = seatText.match(/(\d+)\s*[Ss]eat/);
+          const seatsLeft = seatMatch ? parseInt(seatMatch[1], 10) : undefined;
+
+          return { quad, triple, double, seatsLeft };
+        });
+
+        const isoDate = this.normalizeDateToISO(opt.label);
+        if (!isoDate) continue;
+
+        results.push({
+          date: isoDate,
+          available: scraped
+            ? scraped.seatsLeft === undefined || scraped.seatsLeft > 0
+            : true,
+          seatsLeft: scraped?.seatsLeft,
+          priceQuad: scraped?.quad || undefined,
+          priceTriple: scraped?.triple || undefined,
+          priceDouble: scraped?.double || undefined,
+        });
+      }
+
+      return results;
+    } catch (err) {
+      logger.warn("DreamtourExtractor: parseDepartureDatesFromPage failed", {
+        err,
+      });
       return [];
     }
+  }
+
+  /**
+   * Pick the lowest Quad price across all departure dates as the package
+   * starting-from price. Falls back to 0 if no pricing data is available.
+   */
+  private lowestPriceFromDates(
+    dates: DepartureDate[],
+    currency: string,
+  ): PriceInfo {
+    const amounts = dates.map((d) => d.priceQuad ?? 0).filter((a) => a > 0);
+    const amount = amounts.length > 0 ? Math.min(...amounts) : 0;
+    return { amount, currency, priceType: "STARTING_FROM" };
+  }
+
+  /**
+   * Convert raw date strings from the page into YYYY-MM-DD format.
+   * Handles Indonesian month names: "15 Maret 2026" → "2026-03-15"
+   * Handles month-year only: "Maret 2026" → "2026-03-01"
+   * Handles already-ISO: "2026-03-15" → "2026-03-15"
+   * Returns null if the string cannot be parsed.
+   */
+  private normalizeDateToISO(raw: string): string | null {
+    const ID_MONTHS: Record<string, string> = {
+      januari: "01",
+      februari: "02",
+      maret: "03",
+      april: "04",
+      mei: "05",
+      juni: "06",
+      juli: "07",
+      agustus: "08",
+      september: "09",
+      oktober: "10",
+      november: "11",
+      desember: "12",
+    };
+
+    // Already YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+
+    const lower = raw.toLowerCase().trim();
+
+    // "15 maret 2026" or "15 maret 2026 wib"
+    const idFull = lower.match(/(\d{1,2})\s+([a-z]+)\s+(\d{4})/);
+    if (idFull) {
+      const month = ID_MONTHS[idFull[2]];
+      if (month) return `${idFull[3]}-${month}-${idFull[1].padStart(2, "0")}`;
+    }
+
+    // "maret 2026" — no day, use first of month
+    const idMonthYear = lower.match(/^([a-z]+)\s+(\d{4})$/);
+    if (idMonthYear) {
+      const month = ID_MONTHS[idMonthYear[1]];
+      if (month) return `${idMonthYear[2]}-${month}-01`;
+    }
+
+    // Last resort: native Date parse (handles English formats)
+    const parsed = new Date(raw);
+    if (!isNaN(parsed.getTime())) return parsed.toISOString().substring(0, 10);
+
+    return null;
   }
 
   private parseTabList($: CheerioAPI, tabKeyword: string): string[] {
@@ -328,22 +491,51 @@ export class DreamtourExtractor extends BaseExtractor {
     return items;
   }
 
-  private parseItinerary($: CheerioAPI): string {
-    let itinerary = "";
+  /**
+   * Parse the "Rincian Perjalanan" itinerary section into an array of lines.
+   * Each <p>, <br>-separated segment, or block-level element becomes one entry.
+   * Returns a flat array of non-empty trimmed strings.
+   */
+  private parseItinerary($: CheerioAPI): string[] {
+    const lines: string[] = [];
+
+    // Find the last "Rincian Perjalanan" heading that actually precedes Day content
+    let itinerarySection = $();
     $("h2, h3, h4").each((_i: number, el: AnyNode) => {
-      const heading = $(el).text().toLowerCase();
-      if (heading.includes("rincian") || heading.includes("itinerary")) {
-        const parts: string[] = [];
-        let node = $(el).next();
-        while (node.length && !node.is("h2,h3,h4,footer,.footer")) {
-          const t = node.text().trim();
-          if (t) parts.push(t);
-          node = node.next();
-        }
-        itinerary = parts.join("\n");
-        return false;
+      const text = $(el).text().toLowerCase();
+      if (text.includes("rincian") || text.includes("itinerary")) {
+        itinerarySection = $(el);
       }
     });
-    return itinerary.substring(0, 2000);
+
+    if (!itinerarySection.length) return [];
+
+    // Walk all siblings after the heading until the next same-level heading or footer
+    let node = itinerarySection.next();
+    while (node.length && !node.is("h2,h3,h4,footer,.footer")) {
+      const tagName = (
+        node[0] as unknown as { tagName?: string }
+      ).tagName?.toLowerCase();
+
+      if (tagName === "p" || tagName === "div" || tagName === "li") {
+        // Replace <br> with newline, then split so each visual line is separate
+        const html = node.html() ?? "";
+        const withBreaks = html.replace(/<br\s*\/?>/gi, "\n");
+        // Strip remaining HTML tags
+        const plain = withBreaks.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+        plain
+          .split("\n")
+          .map((l: string) => l.trim())
+          .filter(Boolean)
+          .forEach((l: string) => lines.push(l));
+      } else {
+        const t = node.text().trim();
+        if (t) lines.push(t);
+      }
+
+      node = node.next();
+    }
+
+    return lines;
   }
 }

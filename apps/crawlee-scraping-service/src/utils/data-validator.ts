@@ -1,6 +1,12 @@
-import { z } from 'zod';
-import { ScrapedPackage, PriceInfo, HotelInfo, AirlineInfo, DepartureDate } from '../types';
-import { logger } from './logger';
+import { z } from "zod";
+import {
+  ScrapedPackage,
+  PriceInfo,
+  HotelInfo,
+  AirlineInfo,
+  DepartureDate,
+} from "../types";
+import { logger } from "./logger";
 
 // ============================================================
 // Zod Schemas for runtime validation
@@ -8,21 +14,28 @@ import { logger } from './logger';
 
 export const PriceInfoSchema = z.object({
   amount: z.number().min(0),
-  currency: z.string().min(1).default('IDR'),
-  priceType: z.enum(['PER_PERSON', 'PER_PACKAGE', 'STARTING_FROM']).default('PER_PERSON'),
+  currency: z.string().min(1).default("IDR"),
+  priceType: z
+    .enum(["PER_PERSON", "PER_PACKAGE", "STARTING_FROM"])
+    .default("PER_PERSON"),
   originalAmount: z.number().optional(),
   discountPercent: z.number().min(0).max(100).optional(),
 });
 
 export const DepartureDateSchema = z.object({
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD format'),
+  date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD format"),
   available: z.boolean().default(true),
   seatsLeft: z.number().int().min(0).optional(),
   quota: z.number().int().min(0).optional(),
+  priceQuad: z.number().min(0).optional(),
+  priceTriple: z.number().min(0).optional(),
+  priceDouble: z.number().min(0).optional(),
 });
 
 export const HotelInfoSchema = z.object({
-  city: z.enum(['MAKKAH', 'MADINAH', 'JEDDAH', 'OTHER']),
+  city: z.enum(["MAKKAH", "MADINAH", "JEDDAH", "OTHER"]),
   hotelName: z.string().min(1),
   starRating: z.number().int().min(1).max(5).optional(),
   distanceToHaram: z.string().optional(),
@@ -32,15 +45,15 @@ export const HotelInfoSchema = z.object({
 export const AirlineInfoSchema = z.object({
   name: z.string().min(1),
   code: z.string().optional(),
-  flightClass: z.enum(['ECONOMY', 'BUSINESS', 'FIRST']).default('ECONOMY'),
+  flightClass: z.enum(["ECONOMY", "BUSINESS", "FIRST"]).default("ECONOMY"),
   direct: z.boolean().default(false),
 });
 
 export const OperatorInfoSchema = z.object({
   name: z.string().min(1),
-  website: z.string().url().optional().or(z.literal('')),
+  website: z.string().url().optional().or(z.literal("")),
   phone: z.string().optional(),
-  email: z.string().email().optional().or(z.literal('')),
+  email: z.string().email().optional().or(z.literal("")),
   address: z.string().optional(),
   ijinKemenag: z.string().optional(),
   rating: z.number().min(0).max(5).optional(),
@@ -48,7 +61,7 @@ export const OperatorInfoSchema = z.object({
 });
 
 export const ScrapedPackageSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().min(1), // site-specific ID e.g. "dreamtour-975", not a UUID
   sourceUrl: z.string().url(),
   siteName: z.string().min(1),
   siteId: z.string().min(1),
@@ -56,14 +69,21 @@ export const ScrapedPackageSchema = z.object({
 
   packageName: z.string().min(1),
   packageCode: z.string().optional(),
-  category: z.enum([
-    'UMROH_REGULER', 'UMROH_PLUS', 'UMROH_KHUSUS',
-    'HAJI_REGULER', 'HAJI_PLUS', 'HAJI_FURODA', 'UNKNOWN',
-  ]).default('UNKNOWN'),
+  category: z
+    .enum([
+      "UMROH_REGULER",
+      "UMROH_PLUS",
+      "UMROH_KHUSUS",
+      "HAJI_REGULER",
+      "HAJI_PLUS",
+      "HAJI_FURODA",
+      "UNKNOWN",
+    ])
+    .default("UNKNOWN"),
   subCategory: z.string().optional(),
 
   price: PriceInfoSchema,
-  duration: z.number().int().min(1).max(90),
+  duration: z.number().int().min(0).max(90), // 0 = could not be parsed from page
   departureDates: z.array(DepartureDateSchema).default([]),
   departureCities: z.array(z.string()).default([]),
 
@@ -76,13 +96,16 @@ export const ScrapedPackageSchema = z.object({
 
   operator: OperatorInfoSchema,
 
-  rawContent: z.object({
-    title: z.string().optional(),
-    description: z.string().optional(),
-    testimonials: z.array(z.string()).optional(),
-    images: z.array(z.string().url()).optional(),
-    breadcrumbs: z.array(z.string()).optional(),
-  }).optional(),
+  rawContent: z
+    .object({
+      title: z.string().optional(),
+      description: z.string().optional(),
+      testimonials: z.array(z.string()).optional(),
+      images: z.array(z.string().url()).optional(),
+      breadcrumbs: z.array(z.string()).optional(),
+      descriptionLines: z.array(z.string()).optional(),
+    })
+    .optional(),
 });
 
 // ============================================================
@@ -109,10 +132,10 @@ export function validateScrapedPackage(
   }
 
   const errors = result.error.errors.map(
-    (e) => `${e.path.join('.')}: ${e.message}`,
+    (e) => `${e.path.join(".")}: ${e.message}`,
   );
 
-  logger.debug('Package validation failed', { errors });
+  logger.debug("Package validation failed", { errors });
   return { valid: false, errors };
 }
 
@@ -137,7 +160,7 @@ export function validatePackageBatch(
   }
 
   if (invalidCount > 0) {
-    logger.warn('Some packages failed validation', {
+    logger.warn("Some packages failed validation", {
       jobId,
       total: raw.length,
       valid: valid.length,
@@ -160,11 +183,11 @@ export function validatePackageBatch(
 export function parseIdrPrice(raw: string): number | undefined {
   if (!raw) return undefined;
   // Remove currency symbols and letters
-  const cleaned = raw.replace(/[^\d.,]/g, '').trim();
+  const cleaned = raw.replace(/[^\d.,]/g, "").trim();
   if (!cleaned) return undefined;
 
   // Handle Indonesian format: 25.000.000
-  const noThousands = cleaned.replace(/\./g, '').replace(',', '.');
+  const noThousands = cleaned.replace(/\./g, "").replace(",", ".");
   const num = parseFloat(noThousands);
   return isNaN(num) ? undefined : Math.round(num);
 }
@@ -190,9 +213,18 @@ export function parseDate(raw: string): string | undefined {
   if (!raw) return undefined;
 
   const indonesianMonths: Record<string, string> = {
-    januari: '01', februari: '02', maret: '03', april: '04',
-    mei: '05', juni: '06', juli: '07', agustus: '08',
-    september: '09', oktober: '10', november: '11', desember: '12',
+    januari: "01",
+    februari: "02",
+    maret: "03",
+    april: "04",
+    mei: "05",
+    juni: "06",
+    juli: "07",
+    agustus: "08",
+    september: "09",
+    oktober: "10",
+    november: "11",
+    desember: "12",
   };
 
   // Try ISO format first
@@ -204,14 +236,14 @@ export function parseDate(raw: string): string | undefined {
   if (indoMatch) {
     const month = indonesianMonths[indoMatch[2]];
     if (month) {
-      return `${indoMatch[3]}-${month}-${indoMatch[1].padStart(2, '0')}`;
+      return `${indoMatch[3]}-${month}-${indoMatch[1].padStart(2, "0")}`;
     }
   }
 
   // Try DD/MM/YYYY
   const slashMatch = raw.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
   if (slashMatch) {
-    return `${slashMatch[3]}-${slashMatch[2].padStart(2, '0')}-${slashMatch[1].padStart(2, '0')}`;
+    return `${slashMatch[3]}-${slashMatch[2].padStart(2, "0")}-${slashMatch[1].padStart(2, "0")}`;
   }
 
   return undefined;
@@ -235,15 +267,20 @@ export function parseStarRating(raw: string): number | undefined {
  */
 export function detectPackageCategory(
   text: string,
-): ScrapedPackage['category'] {
+): ScrapedPackage["category"] {
   const lower = text.toLowerCase();
-  if (lower.includes('furoda') || lower.includes('non kuota')) return 'HAJI_FURODA';
-  if (lower.includes('haji plus') || lower.includes('haji khusus')) return 'HAJI_PLUS';
-  if (lower.includes('haji')) return 'HAJI_REGULER';
-  if (lower.includes('umroh plus') || lower.includes('umrah plus')) return 'UMROH_PLUS';
-  if (lower.includes('umroh khusus') || lower.includes('umrah khusus')) return 'UMROH_KHUSUS';
-  if (lower.includes('umroh') || lower.includes('umrah')) return 'UMROH_REGULER';
-  return 'UNKNOWN';
+  if (lower.includes("furoda") || lower.includes("non kuota"))
+    return "HAJI_FURODA";
+  if (lower.includes("haji plus") || lower.includes("haji khusus"))
+    return "HAJI_PLUS";
+  if (lower.includes("haji")) return "HAJI_REGULER";
+  if (lower.includes("umroh plus") || lower.includes("umrah plus"))
+    return "UMROH_PLUS";
+  if (lower.includes("umroh khusus") || lower.includes("umrah khusus"))
+    return "UMROH_KHUSUS";
+  if (lower.includes("umroh") || lower.includes("umrah"))
+    return "UMROH_REGULER";
+  return "UNKNOWN";
 }
 
 // Type exports for convenience

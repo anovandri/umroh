@@ -66,6 +66,10 @@ export interface DepartureDate {
   available: boolean;
   seatsLeft?: number;
   quota?: number;
+  // Per-room-type prices scraped from the date picker result panel
+  priceQuad?: number; // Harga Quad  (4-share room)
+  priceTriple?: number; // Harga Triple (3-share room)
+  priceDouble?: number; // Harga Double (2-share room)
 }
 
 export interface HotelInfo {
@@ -108,7 +112,8 @@ export interface PackageClassification {
 
 export interface RawContent {
   title?: string;
-  description?: string;
+  description?: string; // Full itinerary / package description text
+  descriptionLines?: string[]; // Same content split into individual lines/paragraphs
   testimonials?: string[];
   images?: string[];
   breadcrumbs?: string[];
