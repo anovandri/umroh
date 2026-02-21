@@ -1,0 +1,151 @@
+@startuml Hajj and Umrah Travel Aggregator - Business Flow
+
+!theme plain
+skinparam backgroundColor #FEFEFE
+
+title Hajj and Umrah Travel Aggregator - Business Data Flow
+
+actor "Admin User" as Admin
+actor "Customer" as Customer
+participant "Back Office\n(React Admin)" as BackOffice
+participant "Customer Portal\n(React.js)" as Portal
+participant "API Gateway" as Gateway
+participant "Scraping Service" as Scraper
+participant "Package Service" as PackageService
+participant "Recommendation\nService" as Recommender
+participant "Training Service" as Trainer
+database "PostgreSQL" as DB
+database "Vector DB" as VectorDB
+
+== Data Collection Phase ==
+
+Admin -> BackOffice: Configure scraping targets
+activate BackOffice
+BackOffice -> Gateway: POST /admin/scraping/targets
+activate Gateway
+Gateway -> Scraper: Schedule scraping jobs
+activate Scraper
+
+Scraper -> Scraper: Scrape travel agency websites\n(concurrent virtual threads)
+note right
+  Scrape:
+  - Package details
+  - Prices & dates
+  - Services included
+  - Contact information
+  - Departure cities
+  - Testimonials
+end note
+
+Scraper -> PackageService: Store scraped data
+activate PackageService
+PackageService -> DB: Insert packages, agencies,\ntestimonials, contact info
+PackageService -> VectorDB: Generate & store\npackage embeddings
+deactivate PackageService
+deactivate Scraper
+deactivate Gateway
+deactivate BackOffice
+
+== Customer Interaction Phase ==
+
+Customer -> Portal: Browse packages
+activate Portal
+Portal -> Gateway: GET /packages
+activate Gateway
+Gateway -> PackageService: Fetch packages
+activate PackageService
+PackageService -> DB: Query packages
+DB --> PackageService: Package data
+PackageService --> Gateway: Package list
+deactivate PackageService
+Gateway --> Portal: Package list
+Portal --> Customer: Display packages
+deactivate Gateway
+
+Customer -> Portal: Enter preferences\n(budget, dates, services,\ndeparture city, etc.)
+Portal -> Gateway: POST /preferences
+activate Gateway
+Gateway -> Recommender: Get recommendations\nbased on preferences
+activate Recommender
+
+Recommender -> VectorDB: Generate preference\nembedding & search similar
+VectorDB --> Recommender: Similar packages
+Recommender -> DB: Fetch full package details
+DB --> Recommender: Package details with\ntestimonials
+Recommender -> Recommender: Apply classification model\nto rank results
+Recommender --> Gateway: Ranked recommendations
+deactivate Recommender
+Gateway --> Portal: Recommendations
+deactivate Gateway
+Portal --> Customer: Display personalized\nrecommendations
+deactivate Portal
+
+Customer -> Portal: View package details\n& testimonials
+Portal -> Gateway: GET /packages/{id}
+activate Gateway
+Gateway -> PackageService: Get package details
+activate PackageService
+PackageService -> DB: Fetch package,\nagency, testimonials
+DB --> PackageService: Complete data
+PackageService --> Gateway: Package details
+deactivate PackageService
+Gateway --> Portal: Full package info
+deactivate Gateway
+Portal --> Customer: Display details with\ncontact & testimonials
+
+Customer -> Portal: Save preference\n& interaction
+Portal -> Gateway: POST /interactions
+activate Gateway
+Gateway -> PackageService: Log interaction
+activate PackageService
+PackageService -> DB: Store interaction data
+deactivate PackageService
+deactivate Gateway
+
+== Training & Improvement Phase ==
+
+Admin -> BackOffice: Initiate model training
+activate BackOffice
+BackOffice -> Gateway: POST /admin/training/start
+activate Gateway
+Gateway -> Trainer: Start training job
+activate Trainer
+
+Trainer -> DB: Fetch historical data\n(interactions, preferences,\nconversions)
+DB --> Trainer: Training dataset
+Trainer -> Trainer: Train classification model\n& fine-tune embeddings
+note right
+  Training includes:
+  - Customer preference patterns
+  - Successful conversions
+  - Click-through data
+  - Rating patterns
+end note
+
+Trainer -> DB: Update model metadata
+Trainer -> VectorDB: Update embeddings
+Trainer --> Gateway: Training complete
+deactivate Trainer
+Gateway --> BackOffice: Success status
+deactivate Gateway
+BackOffice --> Admin: Training completed
+deactivate BackOffice
+
+== Analytics & Monitoring ==
+
+Admin -> BackOffice: View analytics
+activate BackOffice
+BackOffice -> Gateway: GET /admin/analytics
+activate Gateway
+Gateway -> PackageService: Get statistics
+activate PackageService
+PackageService -> DB: Query analytics data
+DB --> PackageService: Stats & metrics
+PackageService --> Gateway: Analytics data
+deactivate PackageService
+Gateway --> BackOffice: Dashboard data
+deactivate Gateway
+BackOffice --> Admin: Display analytics\n(popular packages,\nconversion rates, etc.)
+deactivate BackOffice
+
+@enduml

@@ -1,0 +1,69 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "crawlee-scraping-service",
+  "sourceRoot": "apps/crawlee-scraping-service/src",
+  "projectType": "application",
+  "tags": ["scope:crawlee", "type:service"],
+  "targets": {
+    "build": {
+      "executor": "@nx/js:tsc",
+      "outputs": ["{options.outputPath}"],
+      "options": {
+        "outputPath": "dist/apps/crawlee-scraping-service",
+        "main": "apps/crawlee-scraping-service/src/index.ts",
+        "tsConfig": "apps/crawlee-scraping-service/tsconfig.app.json",
+        "assets": [
+          {
+            "glob": "**/.env*",
+            "input": "apps/crawlee-scraping-service",
+            "output": "."
+          }
+        ]
+      }
+    },
+    "serve": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "ts-node-dev --respawn --transpile-only --project apps/crawlee-scraping-service/tsconfig.json -r tsconfig-paths/register apps/crawlee-scraping-service/src/index.ts",
+        "cwd": "{workspaceRoot}"
+      }
+    },
+    "serve-prod": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node dist/apps/crawlee-scraping-service/index.js",
+        "cwd": "{workspaceRoot}"
+      },
+      "dependsOn": ["build"]
+    },
+    "test": {
+      "executor": "@nx/jest:jest",
+      "outputs": ["{workspaceRoot}/coverage/apps/crawlee-scraping-service"],
+      "options": {
+        "jestConfig": "apps/crawlee-scraping-service/jest.config.ts",
+        "passWithNoTests": true
+      }
+    },
+    "lint": {
+      "executor": "@nx/eslint:lint",
+      "outputs": ["{options.outputFile}"],
+      "options": {
+        "lintFilePatterns": ["apps/crawlee-scraping-service/**/*.ts"]
+      }
+    },
+    "docker-build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "docker build -f apps/crawlee-scraping-service/Dockerfile -t umroh/crawlee-scraping-service:latest .",
+        "cwd": "{workspaceRoot}"
+      }
+    },
+    "docker-run": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "docker run --env-file apps/crawlee-scraping-service/.env -p 3100:3100 umroh/crawlee-scraping-service:latest",
+        "cwd": "{workspaceRoot}"
+      }
+    }
+  }
+}

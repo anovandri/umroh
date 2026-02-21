@@ -1,0 +1,219 @@
+@startuml Hajj and Umrah Travel Aggregator - Technical Data Flow
+
+!theme plain
+skinparam backgroundColor #FEFEFE
+
+title Hajj and Umrah Travel Aggregator - Technical Data Flow
+
+package "Client Layer" {
+    [React.js\nCustomer Portal] as CustomerUI
+    [React Admin\nBack Office] as AdminUI
+}
+
+package "API Gateway Layer" {
+    [Spring Boot Gateway\n(Virtual Threads)\nPort: 8080] as Gateway
+    [JWT Authentication\nFilter] as JWTFilter
+    [Rate Limiter] as RateLimiter
+    [Request Router] as Router
+}
+
+package "Service Layer" {
+    
+    package "Scraping Module" {
+        [Scraping Scheduler\n(Quartz)] as Scheduler
+        [Scraper Executor\n(Virtual Threads Pool)] as ScraperExecutor
+        [HTML Parser\n(Jsoup)] as Parser
+        [Data Extractor] as Extractor
+    }
+    
+    package "Package Management" {
+        [Package API\nController] as PackageController
+        [Package Service\nLayer] as PackageService
+        [Package Repository\n(Spring Data JPA)] as PackageRepo
+    }
+    
+    package "Recommendation Engine" {
+        [Recommendation API\nController] as RecommendController
+        [Recommendation\nService] as RecommendService
+        [Sentence Transformer\nClient] as TransformerClient
+        [Vector Search\nClient] as VectorClient
+        [Classification\nEngine] as ClassificationEngine
+    }
+    
+    package "Training Pipeline" {
+        [Training API\nController] as TrainingController
+        [Training Service] as TrainingService
+        [Data Preprocessor] as Preprocessor
+        [Model Trainer] as ModelTrainer
+        [Model Evaluator] as Evaluator
+    }
+    
+    package "Search Module" {
+        [Search API\nController] as SearchController
+        [Hybrid Search\nService] as SearchService
+        [Full-Text Search\nEngine] as FullTextSearch
+    }
+}
+
+package "Data Access Layer" {
+    
+    database "PostgreSQL\n(Port: 5432)" as PostgreSQL {
+        frame "Tables" {
+            [travel_agencies]
+            [packages]
+            [package_services]
+            [testimonials]
+            [contact_info]
+            [departure_cities]
+            [customers]
+            [preferences]
+            [interactions]
+            [bookings]
+            [training_metadata]
+        }
+    }
+    
+    database "Vector Database\n(Pinecone/Milvus)\n(Port: 19530)" as VectorDB {
+        frame "Collections" {
+            [package_embeddings\n(768 dimensions)]
+            [preference_embeddings\n(768 dimensions)]
+        }
+        frame "Indices" {
+            [HNSW Index\n(Cosine Similarity)]
+        }
+    }
+    
+    database "Redis\n(Port: 6379)" as Redis {
+        frame "Cache Keys" {
+            [session:{userId}]
+            [package:{id}]
+            [recommendations:{userId}]
+            [search:{query}]
+        }
+    }
+    
+    database "Object Storage\n(MinIO/S3)" as ObjectStorage {
+        frame "Buckets" {
+            [training-data]
+            [model-artifacts]
+            [scraped-images]
+        }
+    }
+}
+
+package "ML Infrastructure" {
+    [Sentence Transformer\nAPI\n(Python FastAPI)\nModel: paraphrase-MiniLM-L6-v2] as TransformerAPI
+    [Classification Model\nAPI\n(Python FastAPI)\nModel: XGBoost] as ClassifierAPI
+}
+
+' Client to Gateway
+CustomerUI --> Gateway : HTTPS REST API\nJSON Payload
+AdminUI --> Gateway : HTTPS REST API\nJSON Payload
+
+' Gateway processing
+Gateway --> JWTFilter : Validate JWT Token
+Gateway --> RateLimiter : Check Rate Limits
+Gateway --> Router : Route Request
+
+' Router to Controllers
+Router --> PackageController : /api/packages/**
+Router --> RecommendController : /api/recommendations/**
+Router --> TrainingController : /api/training/**
+Router --> SearchController : /api/search/**
+Router --> Scheduler : /api/scraping/**
+
+' Scraping Flow
+Scheduler --> ScraperExecutor : Trigger scraping jobs\n(Virtual Threads)
+ScraperExecutor --> Parser : HTTP Request\n+ HTML Parse
+Parser --> Extractor : Extract structured data
+Extractor --> PackageService : Save package data
+
+' Package Management Flow
+PackageController --> PackageService : Business Logic
+PackageService --> PackageRepo : JPA Operations
+PackageRepo --> PostgreSQL : SQL Queries\n(CRUD)
+PackageService --> Redis : Cache SET/GET\n(TTL: 1 hour)
+PackageService --> TransformerClient : Generate embedding
+TransformerClient --> TransformerAPI : POST /embed\nJSON: {text: "..."}
+TransformerAPI --> TransformerClient : JSON: {embedding: [...]}\n768-dim vector
+PackageService --> VectorClient : Store vector
+VectorClient --> VectorDB : Insert/Upsert\nwith metadata
+
+' Recommendation Flow
+RecommendController --> RecommendService : Get recommendations
+RecommendService --> Redis : Check cache
+RecommendService --> TransformerClient : Embed user preferences
+TransformerClient --> TransformerAPI : POST /embed
+RecommendService --> VectorClient : Vector similarity search
+VectorClient --> VectorDB : Query similar vectors\n(Top-K, Cosine > 0.7)
+VectorDB --> VectorClient : Return IDs + scores
+RecommendService --> PackageRepo : Fetch by IDs
+PackageRepo --> PostgreSQL : SELECT with JOIN\n(packages, agencies, testimonials)
+RecommendService --> ClassificationEngine : Rank results
+ClassificationEngine --> ClassifierAPI : POST /predict\nJSON: {features: [...]}
+ClassifierAPI --> ClassificationEngine : JSON: {scores: [...]}
+RecommendService --> Redis : Cache results
+
+' Training Flow
+TrainingController --> TrainingService : Initiate training
+TrainingService --> PackageRepo : Fetch training data
+PackageRepo --> PostgreSQL : Complex JOIN query\n(interactions, preferences, outcomes)
+TrainingService --> Preprocessor : Clean & transform data
+Preprocessor --> ObjectStorage : Save processed dataset\nParquet format
+TrainingService --> ModelTrainer : Train models
+ModelTrainer --> TransformerAPI : Fine-tune embeddings\n(if needed)
+ModelTrainer --> ClassifierAPI : Train classifier
+ModelTrainer --> Evaluator : Validate model
+Evaluator --> ModelTrainer : Metrics (Accuracy, F1, etc.)
+TrainingService --> ObjectStorage : Save model artifacts\n(pickle, ONNX)
+TrainingService --> PostgreSQL : Update training_metadata
+
+' Search Flow
+SearchController --> SearchService : Search query
+SearchService --> Redis : Check cache
+SearchService --> FullTextSearch : Keyword search
+FullTextSearch --> PostgreSQL : Full-text query\n(tsvector, tsquery)
+SearchService --> VectorClient : Semantic search
+VectorClient --> VectorDB : Vector query
+SearchService --> SearchService : Merge & rank results
+SearchService --> Redis : Cache merged results
+
+note right of Gateway
+  **Virtual Threads**
+  - Lightweight concurrency
+  - Handle 1000s of requests
+  - Non-blocking I/O
+end note
+
+note right of VectorDB
+  **Vector Operations**
+  - Cosine similarity
+  - HNSW indexing
+  - Sub-100ms queries
+  - 768-dimensional vectors
+end note
+
+note right of TransformerAPI
+  **ML Models**
+  - Sentence-BERT embeddings
+  - Batch processing
+  - GPU acceleration
+  - Model versioning
+end note
+
+note right of PostgreSQL
+  **Data Schema**
+  - Normalized tables
+  - Foreign key constraints
+  - Indexes on search columns
+  - JSON columns for metadata
+end note
+
+note right of Redis
+  **Caching Strategy**
+  - TTL-based expiration
+  - LRU eviction policy
+  - Pub/Sub for invalidation
+end note
+
+@enduml

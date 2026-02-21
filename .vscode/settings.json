@@ -1,0 +1,30 @@
+{
+  // Use the workspace TypeScript instead of VS Code's bundled version.
+  // This ensures the version used for type-checking matches what tsc CLI uses.
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+
+  // Editor
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "[typescript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[json]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+
+  // Search exclusions
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/.nx": true,
+    "**/crawlee-storage": true
+  },
+
+  // File exclusions (keeps explorer clean)
+  "files.exclude": {
+    "**/node_modules": true,
+    "**/.nx/cache": true
+  }
+}

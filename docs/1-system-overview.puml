@@ -1,0 +1,124 @@
+@startuml Hajj and Umrah Travel Aggregator - System Overview
+
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam componentStyle rectangle
+
+title Hajj and Umrah Travel Aggregator - System Overview
+
+package "Frontend Layer" {
+    [Customer Web Portal\n(React.js)] as CustomerWeb
+    [Back Office Portal\n(React Admin)] as BackOffice
+}
+
+package "Backend Layer" {
+    [API Gateway\n(Spring Boot)] as Gateway
+    
+    package "Core Services" {
+        [Scraping Service\n(Virtual Threads)] as Scraper
+        [Package Service] as PackageService
+        [Recommendation Service\n(ML Engine)] as Recommender
+        [Training Service\n(ML Training)] as Trainer
+        [Search Service\n(Vector Search)] as Search
+        [Authentication Service] as Auth
+        [Notification Service] as Notification
+    }
+}
+
+package "Data Layer" {
+    database "PostgreSQL\n(Relational Data)" as PostgreSQL {
+        [Packages]
+        [Travel Agencies]
+        [Customers]
+        [Testimonials]
+        [User Preferences]
+    }
+    
+    database "Vector Database\n(Pinecone/Milvus/Weaviate)" as VectorDB {
+        [Package Embeddings]
+        [Preference Embeddings]
+    }
+    
+    database "Redis Cache" as Redis {
+        [Session Data]
+        [Cached Recommendations]
+    }
+    
+    database "Training Data Store\n(S3/MinIO)" as DataStore {
+        [Historical Interactions]
+        [Training Datasets]
+        [Model Artifacts]
+    }
+}
+
+package "External Systems" {
+    [Travel Agency Websites] as ExternalSites
+    [ML Model Registry] as ModelRegistry
+}
+
+package "ML Pipeline" {
+    [Sentence Transformer\n(BERT/MiniLM)] as Transformer
+    [Classification Model\n(Random Forest/XGBoost)] as Classifier
+    [Similarity Engine\n(Cosine Similarity)] as Similarity
+}
+
+' Frontend connections
+CustomerWeb --> Gateway : HTTPS/REST
+BackOffice --> Gateway : HTTPS/REST
+
+' Gateway to services
+Gateway --> Auth : Authenticate
+Gateway --> PackageService : Manage Packages
+Gateway --> Recommender : Get Recommendations
+Gateway --> Search : Search Packages
+Gateway --> Notification : Send Notifications
+
+' Scraper connections
+Scraper --> ExternalSites : HTTP/Selenium
+Scraper --> PackageService : Store Data
+
+' Service to data layer
+PackageService --> PostgreSQL : CRUD Operations
+PackageService --> VectorDB : Store Embeddings
+Auth --> PostgreSQL : User Management
+Auth --> Redis : Session Cache
+
+' Recommendation flow
+Recommender --> VectorDB : Vector Search
+Recommender --> PostgreSQL : Fetch Details
+Recommender --> Transformer : Generate Embeddings
+Recommender --> Similarity : Calculate Similarity
+Recommender --> Classifier : Classify Preferences
+Recommender --> Redis : Cache Results
+
+' Training flow
+Trainer --> PostgreSQL : Fetch Training Data
+Trainer --> DataStore : Load/Store Datasets
+Trainer --> Transformer : Fine-tune Models
+Trainer --> Classifier : Train Classifier
+Trainer --> ModelRegistry : Store Models
+Trainer --> VectorDB : Update Embeddings
+
+' Search service
+Search --> VectorDB : Semantic Search
+Search --> PostgreSQL : Keyword Search
+
+note right of Scraper
+  Uses Virtual Threads for
+  efficient concurrent scraping
+  of multiple websites
+end note
+
+note right of VectorDB
+  Stores embeddings from
+  Sentence Transformers
+  for similarity search
+end note
+
+note right of Recommender
+  Combines vector similarity
+  and classification for
+  personalized recommendations
+end note
+
+@enduml

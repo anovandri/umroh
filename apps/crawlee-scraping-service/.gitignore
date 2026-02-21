@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+crawlee-storage/
+logs/
+*.log
+.DS_Store
+coverage/
